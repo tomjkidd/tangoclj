@@ -1,9 +1,8 @@
 (ns tango.runtime-test
-  (:require [tango.log.atom]
-            [tango.runtime :as rt]
+  (:require [tango.runtime :as rt]
             [clojure.test :as t]))
 
-(def rt (rt/tango-runtime (tango.log.atom/log)))
+(def rt (rt/tango-runtime (rt/in-memory-log)))
 (rt/register-tango-object rt "abc" {:apply (fn [val] (println (str "Value:" val)))})
 
 (def tango-atom

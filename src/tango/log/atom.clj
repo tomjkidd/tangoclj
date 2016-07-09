@@ -1,4 +1,5 @@
-(ns tango.log.atom)
+(ns tango.log.atom
+  (:require [tango.log :as l]))
 
 (defn log
   "Create an atom-based Tango log
@@ -61,3 +62,23 @@
   {:left (str "tango.log.atom/trim:"
               "TrimError:"
               "Trim is not implemented")})
+
+(defrecord Log [log-atom]
+  l/SharedLog
+
+  (l/append [this entry]
+    (append log-atom entry))
+  
+  (l/read [this position]
+    (read log-atom position))
+
+  (l/tail [this]
+    (tail log-atom))
+
+  (l/trim [this position]
+    (trim log-atom position)))
+
+(defn log-record
+  "Create a Log record conveniently"
+  []
+  (Log. (log)))

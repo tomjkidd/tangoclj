@@ -1,5 +1,11 @@
 (ns tango.runtime
-  (:require [tango.log.atom]))
+  (:require [tango.log :as log]
+            [tango.log.atom :as atom-log]))
+
+(defn in-memory-log
+  "Create an in-memory log to be used with the Tango Runtime"
+  []
+  (atom-log/log-record))
 
 (defn tango-runtime
   "Create a tango runtime given a shared log
@@ -18,7 +24,7 @@
   "Write an entry to the log, targeting oid with an opaque value"
   [runtime oid opaque]
   (let [l (:log @runtime)]
-    (tango.log.atom/append l {:oid oid :value opaque})))
+    (log/append l {:oid oid :value opaque})))
 
 (defn query-helper
   "Reads as far forward in the log as possible for the current state of the log (based on log tail).
@@ -30,11 +36,11 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
   (let [deref-rt @runtime
         l (:log deref-rt)
         p (:next-position deref-rt)
-        tail (tango.log.atom/tail l)]
+        tail (log/tail l)]
     (loop [position p runtime runtime]
       (when (<= position tail)
         (do
-          (let [either-entry (tango.log.atom/read l position)
+          (let [either-entry (log/read l position)
                 entry (:right either-entry)
                 oid (:oid entry)
                 val (:value entry)
@@ -55,3 +61,4 @@ Assumes that objects only care about new reads from the point they enter the sys
                      (assoc regs oid [tango-obj])
                      (assoc regs oid (conj (regs oid) tango-obj)))]
     (swap! runtime (fn [prev] (assoc prev :object-registry new-regs)))))
+
