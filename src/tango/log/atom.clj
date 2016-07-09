@@ -35,7 +35,8 @@
 (defn append
   "Append an entry to the given log"
   [log entry]
-  (swap! log (append-swap entry)))
+  (swap! log (append-swap entry))
+  (:position @log))
 
 (defn read
   "Use a position to retreive an entry from the given log"
