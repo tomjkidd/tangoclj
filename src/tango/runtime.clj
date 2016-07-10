@@ -47,7 +47,7 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
                 registry (:object-registry @runtime)
                 regs (registry oid)
                 next-position (inc position)]
-            (doall (map #((:apply %) val) regs))
+            (doall (map #((:apply %) entry) regs))
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
             (recur next-position runtime)))))))
 

@@ -1,5 +1,6 @@
 (ns tango.runtime-test
   (:require [tango.runtime :as rt]
+            [tango.object.register :as reg]
             [clojure.test :as t]))
 
 (def rt (rt/tango-runtime (rt/in-memory-log)))
@@ -19,3 +20,11 @@
 (rt/update-helper rt "abc" "ghi")
 (rt/query-helper rt "abc")
 
+(def test-tango-register
+  (reg/tango-register "tom" 0))
+
+(rt/register-tango-object rt "tom" test-tango-register)
+(reg/set test-tango-register 1 rt)
+(reg/get test-tango-register rt)
+(reg/set test-tango-register 7 rt)
+(reg/get test-tango-register rt)
