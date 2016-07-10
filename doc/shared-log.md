@@ -19,6 +19,11 @@ Offset and position are both names for where an entry is in the log.
 An Entry is a collection of information that is used to reconstruct the
 update history of a TangoObject.
 
+### Notes
+
+* The shared log is the source of durability for Tango Objects.
+* At least for now, the stream aspect of Tango is not being implemented
+
 ## Interface
 
 A shared log (based on CORFU) provides the following interface
