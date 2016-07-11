@@ -1,6 +1,7 @@
 (ns tango.runtime-test
   (:require [tango.runtime :as rt]
             [tango.object.register :as reg]
+            [tango.object.list :as tlist]
             [tango.object.map :as tmap]
             [clojure.test :as t]))
 
@@ -42,3 +43,13 @@
 (tmap/get test-map :a rt)
 (tmap/dissoc test-map :a rt)
 (tmap/get test-map :b rt)
+
+(def test-list
+  (tlist/tango-list "tango-list"))
+(rt/register-tango-object rt "tango-list" test-list)
+
+(tlist/cons test-list :z rt)
+(tlist/cons test-list :y rt)
+(tlist/cons test-list :x rt)
+(tlist/first test-list rt)
+(tlist/rest test-list rt)
