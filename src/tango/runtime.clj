@@ -2,6 +2,12 @@
   (:require [tango.log :as log]
             [tango.log.atom :as atom-log]))
 
+; TODO: Add an optional position argument to query-helper that will tell the reader a point at which to stop syncing
+; TODO: Add a checkpoint function to allow which will provide query-helper with a position of the checkpoint to make reads faster
+; TODO: Add a forget function that allows entries before a checkpoint to be forgotten. NOTE: this means giving up previous history verisons
+; TODO: Add speculative commit logs to support transactions. These logs create a point at which the changes that occur in a transaction can be made available to all clients
+; TODO: Implement transactions for optimistic concurrency control.
+
 (defn in-memory-log
   "Create an in-memory log to be used with the Tango Runtime"
   []
