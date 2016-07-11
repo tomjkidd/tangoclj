@@ -39,6 +39,8 @@ version is just the position in the log file of the most recent update
 that modified the object
 * write-set, a list of objects modified, along with their versions.
 
+### Further notes from the paper
+
 * A transaction only succeeds if none of it's reads are stale when the
 commit is encountered (ie object hasn't changed since it was read).
 * begin-tx and end-tx methods should be provided by the runtime to signify

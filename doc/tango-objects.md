@@ -24,3 +24,10 @@ to read the state at a given time, which will advance the log to be current.
 
 
  ## Transactions
+ 
+ Transactions can be performed over multiple Tango objects, using begin-tx
+ and end-tx methods provided by the Tango runtime. In the context of a
+ transaction, for each of the oid's that are part of it, each read/write
+ is added to read/write sets until end-tx is called. end-tx will add a
+ commit entry, play the log forward and decide whether or not to apply
+ the reads from the transaction
