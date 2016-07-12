@@ -1,41 +1,43 @@
 (ns tango.object.list
-  (:require [tango.runtime :as rt]))
+  (:require [tango.runtime :as rt]
+            [tango.util.either :as either]))
 
 (defn tango-list
   "Create a Tango List object.
 
   Used to store a list primitive data values."
-  [oid]
-  (let [a (atom '())]
-    {:oid oid
-     :value a
-     :apply (fn [log-entry]
-              (swap! a (fn [prev]
-                         (clojure.core/cons (:value log-entry) prev))))}))
+  [oid tango-runtime]
+  (let [either (rt/create-tango-object 
+                tango-runtime
+                {:oid oid
+                 :nullary-value '()
+                 :apply (fn [prev-state log-entry]
+                          (clojure.core/cons (:value log-entry) prev-state))})]
+    (either/succeed-or-throw-error either)))
 
 (defn get
   "Get the value of the list"
   [tango-list tango-runtime]
   (rt/query-helper tango-runtime (:oid tango-list))
-  @(:value tango-list))
+  ((:get-current-state tango-list)))
 
 (defn nth
   "Access the value at the given index"
   [tango-list index tango-runtime]
   (rt/query-helper tango-runtime (:oid tango-list))
-  (clojure.core/nth @(:value tango-list) index))
+  (clojure.core/nth ((:get-current-state tango-list)) index))
 
 (defn first
   "Access the value at the head of the list"
   [tango-list tango-runtime]
   (rt/query-helper tango-runtime (:oid tango-list))
-  (clojure.core/first @(:value tango-list)))
+  (clojure.core/first ((:get-current-state tango-list))))
 
 (defn rest
   "Access the tail of the list"
   [tango-list tango-runtime]
   (rt/query-helper tango-runtime (:oid tango-list))
-  (clojure.core/rest @(:value tango-list)))
+  (clojure.core/rest ((:get-current-state tango-list))))
 
 (defn cons
   "Add a new head to the list"
