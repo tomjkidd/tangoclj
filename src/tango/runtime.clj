@@ -42,10 +42,11 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
   (let [deref-rt @runtime
         l (:log deref-rt)
         p (:next-position deref-rt)
-        tail (log/tail l)]
-    (loop [position p runtime runtime]
-      (when (<= position tail)
-        (do
+        tail (log/tail l)
+        log-ready? (not (nil? tail))]
+    (when log-ready?
+      (loop [position p runtime runtime]
+        (when (<= position tail)
           (let [either-entry (log/read l position)
                 entry (:right either-entry)
                 oid (:oid entry)
@@ -53,18 +54,54 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
                 registry (:object-registry @runtime)
                 regs (registry oid)
                 next-position (inc position)]
-            (doall (map #((:apply %) entry) regs))
+            (doall (map (fn [reg-obj]
+                          (let [apply-fn (:apply reg-obj)
+                                value-atom (:value reg-obj)
+                                prev-state @value-atom]
+                            (swap! value-atom (fn [prev-state]
+                                                (apply-fn prev-state entry)))))
+                        regs))
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
             (recur next-position runtime)))))))
 
 (defn register-tango-object
-  "Register a Tango Object with the given runtime to pay attention to log updates.
+  "Register a Tango Object with the given runtime to pay attention to log updates for
+a given oid. Returns a function to ask for the current state, which should be used
+by a Tango Object in order to ask for a read from the runtime.
 
-Assumes that objects only care about new reads from the point they enter the system at."
-  [runtime oid tango-obj]
+Assumes that objects only care about new reads from the point they enter the system 
+at."
+  [runtime oid tango-object]
   (let [regs (:object-registry @runtime)
+        value-atom (atom (:nullary-value tango-object))
+        get-current-state-fn (fn [] @value-atom)
+        reg-obj (-> (assoc tango-object :value value-atom)
+                    (assoc :get-current-state get-current-state-fn))
         new-regs (if (nil? (regs oid))
-                     (assoc regs oid [tango-obj])
-                     (assoc regs oid (conj (regs oid) tango-obj)))]
-    (swap! runtime (fn [prev] (assoc prev :object-registry new-regs)))))
+                   (assoc regs oid [reg-obj])
+                   (assoc regs oid (conj (regs oid) reg-obj)))]
+    ; Update the registry
+    (swap! runtime (fn [prev] (assoc prev :object-registry new-regs)))
+    
+    ; Return object to caller, don't expose the atom!
+    (dissoc reg-obj :value)))
 
+(defn create-tango-object
+  "Use a map with :oid, :nullary-value, and :apply keys to create a registered Tango
+Object"
+  [runtime tango-object-map]
+  (let [expected [:oid :nullary-value :apply]
+        valid? (every? #(contains? tango-object-map %) expected)]
+    (if valid?
+      {:right (register-tango-object runtime
+                                     (:oid tango-object-map)
+                                     tango-object-map)}
+      {:left (str "tango.runtime/create-tango-object:"
+                  "CreateTangoObjectError:"
+                  "You need to provide the keys "
+                  (str expected)
+                  " to create a Tango Object.")})))
+
+(defn in-memory-runtime
+  []
+  (tango-runtime (in-memory-log)))

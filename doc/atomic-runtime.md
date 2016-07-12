@@ -26,3 +26,8 @@ perform arbitrary computation, in much the same way that you would
 through a tool like SQL Server Management Studio. If the transaction
 is aborted, the shared log will not use the changes, but you will have
 accurate data locally if you choose to use it.
+
+### Changes
+
+The tango objects now use an apply with a different type signature,
+the previous state and the log entry
