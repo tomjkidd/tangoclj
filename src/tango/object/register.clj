@@ -1,6 +1,6 @@
 (ns tango.object.register
   (:require [tango.runtime :as rt]
-            [tango.util :as util]))
+            [tango.util.either :as either]))
 
 (defn tango-register
   "Create a Tango Register object.
@@ -12,7 +12,7 @@
                                         :nullary-value nil
                                         :apply (fn [prev-state log-entry]
                                                  (:value log-entry))})]
-    (util/either-value-or-throw-error either)))
+    (either/right-or-throw-error either)))
 
 (defn set
   [tango-register val tango-runtime]
