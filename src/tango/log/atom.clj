@@ -1,5 +1,6 @@
 (ns tango.log.atom
-  (:require [tango.log :as l]))
+  (:require [tango.log :as l]
+            [tango.util.either :as either]))
 
 (defn log
   "Create an atom-based Tango log
@@ -46,10 +47,10 @@
         es (:entries l)
         e (get es position)]
     (if (nil? e)
-      {:left (str "tango.log.atom/read:"
-                  "ReadError:"
-                  "The log could not find an entry at position " position)}
-      {:right e})))
+      (either/error (str "tango.log.atom/read:"
+                         "ReadError:"
+                         "The log could not find an entry at position " position))
+      (either/success e))))
 
 (defn tail
   "Get a reference to the position of the tail of the given log"
@@ -59,9 +60,9 @@
 (defn trim
   "Indicate that a position in the given log can be garbage collected"
   [log position]
-  {:left (str "tango.log.atom/trim:"
-              "TrimError:"
-              "Trim is not implemented")})
+  (either/error (str "tango.log.atom/trim:"
+                     "TrimError:"
+                     "Trim is not implemented")))
 
 (defrecord Log [log-atom]
   l/SharedLog

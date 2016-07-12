@@ -1,6 +1,7 @@
 (ns tango.runtime
   (:require [tango.log :as log]
-            [tango.log.atom :as atom-log]))
+            [tango.log.atom :as atom-log]
+            [tango.util.either :as either]))
 
 ; TODO: Add an optional position argument to query-helper that will tell the reader a point at which to stop syncing
 ; TODO: Add a checkpoint function to allow which will provide query-helper with a position of the checkpoint to make reads faster
@@ -93,14 +94,16 @@ Object"
   (let [expected [:oid :nullary-value :apply]
         valid? (every? #(contains? tango-object-map %) expected)]
     (if valid?
-      {:right (register-tango-object runtime
-                                     (:oid tango-object-map)
-                                     tango-object-map)}
-      {:left (str "tango.runtime/create-tango-object:"
-                  "CreateTangoObjectError:"
-                  "You need to provide the keys "
-                  (str expected)
-                  " to create a Tango Object.")})))
+      (either/success
+       (register-tango-object runtime
+                              (:oid tango-object-map)
+                              tango-object-map))
+      (either/error
+       (str "tango.runtime/create-tango-object:"
+            "CreateTangoObjectError:"
+            "You need to provide the keys "
+            (str expected)
+            " to create a Tango Object.")))))
 
 (defn in-memory-runtime
   []

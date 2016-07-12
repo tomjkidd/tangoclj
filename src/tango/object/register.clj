@@ -12,7 +12,7 @@
                                         :nullary-value nil
                                         :apply (fn [prev-state log-entry]
                                                  (:value log-entry))})]
-    (either/right-or-throw-error either)))
+    (either/succeed-or-throw-error either)))
 
 (defn set
   [tango-register val tango-runtime]
