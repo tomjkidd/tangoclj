@@ -1,6 +1,7 @@
 (ns tango.object.register
-  (:require [tango.runtime :as rt]
-            [tango.util.either :as either]))
+  (:require [tango.util.either :as either]
+            [tango.runtime.core :as c]
+            [tango.runtime :as rt]))
 
 (defn tango-register
   "Create a Tango Register object.
@@ -16,10 +17,10 @@
 
 (defn set
   [tango-register val tango-runtime]
-  (rt/update-helper tango-runtime (:oid tango-register) val))
+  (c/update-helper tango-runtime (:oid tango-register) val))
 
 (defn get
   [tango-register tango-runtime]
-  (rt/query-helper tango-runtime (:oid tango-register))
-  ((:get-current-state tango-register)))
+  (c/query-helper tango-runtime (:oid tango-register))
+  (c/get-current-state tango-runtime tango-register))
 

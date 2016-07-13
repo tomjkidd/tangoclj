@@ -1,7 +1,10 @@
 (ns tango.runtime
   (:require [tango.log :as log]
             [tango.log.atom :as atom-log]
-            [tango.util.either :as either]))
+            [tango.util :as util]
+            [tango.util.either :as either]
+            [tango.transaction-runtime :as trans]
+            [tango.runtime.core :as c]))
 
 ; TODO: Add an optional position argument to query-helper that will tell the reader a point at which to stop syncing
 ; TODO: Add a checkpoint function to allow which will provide query-helper with a position of the checkpoint to make reads faster
@@ -21,17 +24,33 @@
 
 :next-position An index to the next log entry to read, safe to assume that reads are current up until this
 
-:object-registry A string to list of TangoObject map that the runtime uses to apply updates to registered Tango Objects."
+:object-registry A string to list of TangoObject map that the runtime uses to apply updates to registered Tango Objects.
+
+:transaction-oid-mappings :: HashMap <TransactionHash, HashMap<Oid, ObjectHash>>
+This is necessary because each registered Tango Object can be used in any transaction
+runtime that is created.
+
+When a registered Tango Object is passed to a transaction runtime, the runtime finds
+out it has to pay attention to the oid of the Tango Object, and this means using the
+oid->clone function to add the object to the transaction runtime's :object-registry
+will need to know which object it is working with.
+"
+
   [log]
   (atom {:log log
          :next-position 0
-         :object-registry {}}))
+         :object-registry {}
+         :transaction-mappings {}}))
+
+(defn get-current-state
+  [runtime-atom tango-object]
+  ((:get-current-state tango-object)))
 
 (defn update-helper
   "Write an entry to the log, targeting oid with an opaque value"
   [runtime oid opaque]
   (let [l (:log @runtime)]
-    (log/append l {:oid oid :value opaque})))
+    (log/append l {:type :write :oid oid :value opaque :speculative false})))
 
 (defn query-helper
   "Reads as far forward in the log as possible for the current state of the log (based on log tail).
@@ -55,13 +74,16 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
                 registry (:object-registry @runtime)
                 regs (registry oid)
                 next-position (inc position)]
-            (doall (map (fn [reg-obj]
-                          (let [apply-fn (:apply reg-obj)
-                                value-atom (:value reg-obj)
-                                prev-state @value-atom]
-                            (swap! value-atom (fn [prev-state]
-                                                (apply-fn prev-state entry)))))
-                        regs))
+            (if (not (:speculative entry))
+              (doall (map (fn [reg-obj]
+                            (let [apply-fn (:apply reg-obj)
+                                  value-atom (:value reg-obj)
+                                  prev-state @value-atom]
+                              (swap! value-atom (fn [prev-state]
+                                                  (apply-fn prev-state entry)))))
+                          regs))
+              (do
+                (println "TODO: Need to buffer speculative writes!")))
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
             (recur next-position runtime)))))))
 
@@ -91,9 +113,9 @@ at."
   "Use a map with :oid, :nullary-value, and :apply keys to create a registered Tango
 Object"
   [runtime tango-object-map]
-  (let [expected [:oid :nullary-value :apply]
-        valid? (every? #(contains? tango-object-map %) expected)]
-    (if valid?
+  (let [runtime (:atom runtime)
+        expected [:oid :nullary-value :apply]]
+    (if (util/contains-expected-keys? tango-object-map expected)
       (either/success
        (register-tango-object runtime
                               (:oid tango-object-map)
@@ -108,3 +130,98 @@ Object"
 (defn in-memory-runtime
   []
   (tango-runtime (in-memory-log)))
+
+(defrecord TangoRuntime [atom]
+  c/ITangoRuntime
+  (update-helper [this oid opaque]
+    (update-helper (:atom this) oid opaque))
+  (query-helper [this oid]
+    (query-helper (:atom this) oid))
+  (get-current-state [this tango-object]
+    (get-current-state (:atom this) tango-object)))
+
+(defn runtime
+  "Create a TangRuntime record conveniently"
+  []
+  (TangoRuntime. (in-memory-runtime)))
+
+(defrecord TransactionTangoRuntime [atom]
+  c/ITangoRuntime
+  (update-helper [this oid opaque]
+    (trans/update-helper (:atom this) oid opaque))
+  (query-helper [this oid]
+    (trans/query-helper (:atom this) oid))
+  (get-current-state [this tango-object]
+    (trans/get-current-state (:atom this) tango-object)))
+
+(defn transaction-runtime
+  "Create a TransactionTangoRuntime conveniently"
+  [runtime-atom]
+  (TransactionTangoRuntime. runtime-atom))
+
+(defn- clone-registry-object
+  "Take a snapshot of a single Tango Object (from the registry)
+
+This dereferences the nested atoms and creates new ones"
+  [tango-object]
+  (let [current-value @(:value tango-object)
+        value-atom (atom current-value)
+        get-current-state-fn (fn [] @value-atom)
+        clone (-> (assoc tango-object :value value-atom)
+                  (assoc :get-current-state get-current-state-fn)
+                  (assoc :cloned-from tango-object))]
+    clone))
+
+(defn- tango-object-hash
+  "Because the tango-object will evolve over time as new values are applied,
+we have to use something that will not change, the :apply function"
+  [tango-object]
+  (hash (:apply tango-object)))
+
+(defn take-full-object-registry-snapshot
+  "Take an isolated snapshot of the whole runtime object registry."
+  [runtime-snapshot]
+  (let [registry (:object-registry runtime-snapshot)
+        clone-mappings (atom {})
+        clone-registry-pairs 
+        (fn [[oid tango-objects]]
+          [oid (doall
+                (map (fn [t]
+                       (let [clone (clone-registry-object t)]
+                         (swap! clone-mappings (fn [prev]
+                                                 (assoc prev (tango-object-hash t) clone)))
+                         clone)) tango-objects))])
+        cloned-registry (into {} (doall (map clone-registry-pairs registry)))]
+    {:clone-mappings @clone-mappings
+     :cloned-registry cloned-registry}))
+
+; NOTE: This implementation was not completed, went a different route for now
+(defn get-clone-registry-objects-fn
+  "Provides a function to create clones of all of the TangoObjects that are known to a given runtime
+
+These clones will serve as snapshots of the current state of the runtime"
+  [runtime]
+  (fn [oid]
+    (let [registry (:object-registry @runtime)
+          regs (registry oid)
+          clones (doall (map clone-registry-object regs))]
+      clones)))
+
+(defn begin-transaction
+  [runtime-record]
+  (let [runtime @(:atom runtime-record)
+        {:keys [clone-mappings cloned-registry]} (take-full-object-registry-snapshot runtime)
+        transaction-id (util/uuid)]
+    (-> (trans/tango-transaction-runtime
+         transaction-id
+         (:log runtime)
+         (:next-position runtime)
+         (fn [oid]
+           (cloned-registry oid))
+         (fn [tango-object]
+           (clone-mappings (tango-object-hash tango-object))))
+        (TransactionTangoRuntime.))))
+
+(defn validate-commit
+  [position]
+  nil)

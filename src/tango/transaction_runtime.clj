@@ -1,0 +1,189 @@
+(ns tango.transaction-runtime
+  (:require [tango.log :as log]
+            [tango.log.atom :as atom-log]
+            [tango.runtime.core :as core]))
+
+(defn tango-transaction-runtime
+  "Creates a transaction runtime for a shared log
+
+transaction-id is the id to use to identify a specific transaction
+
+log is the shared log to use
+
+next-position is the position in the log the transaction started from
+
+:object-registry is a hash-map of oid keys to a list of cloned TangoObjects from a 
+tango-runtime.
+The :object-registry is initially empty. The object-registry is potentially populated
+each time query-helper is called with a new Tango Object because now it knows that 
+it needs clones of objects that are paying attention to a given oid to apply the 
+speculative writes against.
+
+The oid->clones function is used to get these clones from the main tango-runtime so 
+that the transaction doesn't have to know how this is accomplished.
+In the future, different isolation modes may be desired, so this should prevent the
+transaction-runtime from knowing too much about how the clones are retreived.
+
+The tango-object->clone-object function is needed to allow :get-current-state to find
+the correct clone that corresponds to a tango object the client is attempting to 
+query. The clone is not exposed to the client at all, they continue to pass the 
+original tango-object they created to whichever runtime they want, and the runtimes 
+keep it straight on the clients behalf.
+
+A tango-object has the following fields
+{ :oid, :nullary-value, :apply, :value, :get-current-state }
+NOTE: :apply and :get-current-state are functions
+NOTE: :value is a clojure Atom!!
+
+More about the transaction runtime:
+
+:reads is a chronological list of the (:oid,:position)s where reads are performed in 
+the transaction
+:writes is a chronological list of the (:oid,:position)s where writes are performed in
+the transaction"
+  [transaction-id log next-position oid->clones tango-object->clone-object]
+  (atom {:id transaction-id
+         :log log
+         :starting-next-position next-position
+         :next-position next-position
+         :commit-position nil
+         :oid->clones oid->clones
+         :tango-object->clone-object tango-object->clone-object
+         :object-registry {}
+         :reads []
+         :writes []
+         :out-of-tx-writes []}))
+
+(defn- cache-clones
+  "Use the oid->clones function to get the Tango Objects and put them into
+the object registry."
+  [runtime-atom oid]
+  (let [runtime @runtime-atom
+        old-registry (:object-registry runtime)
+        clones ((:oid->clones runtime) oid)
+        new-registry (assoc old-registry oid clones)]
+    (swap! runtime-atom (fn [prev]
+                          (assoc prev :object-registry new-registry)))
+    clones))
+
+(defn get-current-state
+  "Use the tango-object->clone-object function to get the clone that a given Tango
+Object corresponds to."
+  [runtime-atom tango-object]
+  (let [lookup (:tango-object->clone-object @runtime-atom)
+        clone (lookup tango-object)]
+    ((:get-current-state clone))))
+
+(defn update-helper
+  "Write a speculative entry to the log, targeting oid with an opaque value
+
+When a write is performed, it is added to the :writes of the transaction runtime"
+  [runtime oid opaque]
+  (let [{:keys [log commit-position]} @runtime]
+    (when (not (nil? commit-position))
+      (throw (Exception. "Transaction committed already, can't perform more writes")))
+    (let [entry {:type :write
+                 :oid oid
+                 :value opaque
+                 :speculative true}
+          position (log/append log entry)]
+      (swap! runtime (fn [prev]
+                       (let [old-writes (:writes prev)
+                             w {:oid oid :position position}
+                             new-writes (conj old-writes w)]
+                         (assoc prev :writes new-writes))))
+      position)))
+
+(defn query-helper
+  "Reads as far forward in the log as possible for the current state of the log (based on log tail).
+
+who can be :client for when the protocol uses it, and :transaction-runtime when the
+transaction runtime is trying to commit.
+
+The oid is used to load the clones that will be necessary by the runtime to apply
+isolated changes."
+  ([runtime oid]
+   (let [rt @runtime
+         position (:next-position rt)]
+     (query-helper runtime oid position)))
+
+  ([runtime oid position]
+   (let [deref-rt @runtime
+         l (:log deref-rt)
+         p position
+         tail (log/tail l)
+         log-ready? (not (nil? tail))]
+     (when (nil? (deref-rt oid))
+       ; If this is the first time oid is used, cache clones
+       (cache-clones runtime oid))
+     (when log-ready?
+       (loop [position p runtime runtime]
+         (when (<= position tail)
+           (let [rt @runtime
+                 either-entry (log/read l position)
+                 entry (:right either-entry)
+                 entry-type (:type entry)
+                 entry-oid (:oid entry)
+                 registry (:object-registry rt)
+                 regs (registry oid)
+                 next-position (inc position)]
+             
+             (when (= :write entry-type)
+                                        ; Record that the read to oid occurred
+               (let [old-reads (:reads rt)
+                     new-read {:oid oid :position position}
+                     new-reads (conj old-reads new-read)]
+                 (swap! runtime (fn [prev] (assoc prev :reads new-reads))))
+               
+               (if (:speculative entry)
+                 (doall 
+                  (map (fn [reg-obj]
+                         (let [apply-fn (:apply reg-obj)
+                               value-atom (:value reg-obj)
+                               prev-state @value-atom]
+                           (swap! value-atom (fn [prev-state]
+                                               (apply-fn prev-state entry)))))
+                       regs))
+                 (do
+                   (let [old-writes (:out-of-tx-writes rt)
+                         new-write {:oid entry-oid :position position}
+                         new-writes (conj old-writes new-write)]
+                     (swap! runtime (fn [prev]
+                                      (assoc prev :out-of-tx-writes new-writes))))))
+
+               (swap! runtime (fn [prev] (assoc prev :next-position next-position))))
+             
+             (recur next-position runtime))))))))
+
+(defn create-commit-entry
+  [runtime-id reads-and-writes]
+  {:type :commit
+   :data reads-and-writes
+   :transaction-runtime-id runtime-id})
+
+(defn append-commit-entry
+  [log entry]
+  (log/append log entry))
+
+(defn commit-transaction
+  "Attempt to commit a transaction. Returns true if able, false otherwise."
+  [runtime]
+  ; TODO: Write a commit entry to the log
+
+  ; Write a commit entry to the log then
+  ; Read through the commit position to collect all changes
+  (let [rt @(:atom runtime)
+        l (:log rt)
+        commit-entry (create-commit-entry (:id rt)
+                                          (select-keys rt [:reads :writes]))
+        commit-position (append-commit-entry l commit-entry)]
+    (swap! (:atom runtime) (fn [prev]
+                             (assoc prev :commit-position commit-position)))
+    (query-helper (:atom runtime) :transaction-runtime commit-position))
+  
+  ; Determine if the transaction is valid
+  (let [rt @(:atom runtime)
+        details (select-keys rt [:reads :writes :out-of-tx-writes])]
+    details
+    rt))
+
