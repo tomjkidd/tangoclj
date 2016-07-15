@@ -26,6 +26,9 @@
 
 :object-registry A string to list of TangoObject map that the runtime uses to apply updates to registered Tango Objects.
 
+:version-map An oid to position map, where position is the location of the most
+recently applied write.
+
 :transaction-oid-mappings :: HashMap <TransactionHash, HashMap<Oid, ObjectHash>>
 This is necessary because each registered Tango Object can be used in any transaction
 runtime that is created.
@@ -40,6 +43,7 @@ will need to know which object it is working with.
   (atom {:log log
          :next-position 0
          :object-registry {}
+         :version-map {}
          :transaction-mappings {}}))
 
 (defn get-current-state
@@ -67,23 +71,35 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
     (when log-ready?
       (loop [position p runtime runtime]
         (when (<= position tail)
-          (let [either-entry (log/read l position)
+          (let [rt @runtime
+                either-entry (log/read l position)
                 entry (:right either-entry)
                 oid (:oid entry)
+                type (:type entry)
                 val (:value entry)
-                registry (:object-registry @runtime)
+                registry (:object-registry rt)
                 regs (registry oid)
                 next-position (inc position)]
-            (if (not (:speculative entry))
-              (doall (map (fn [reg-obj]
-                            (let [apply-fn (:apply reg-obj)
-                                  value-atom (:value reg-obj)
-                                  prev-state @value-atom]
-                              (swap! value-atom (fn [prev-state]
-                                                  (apply-fn prev-state entry)))))
-                          regs))
-              (do
-                (println "TODO: Need to buffer speculative writes!")))
+            (case type
+              :write (if (not (:speculative entry))
+                       (do
+                         (doall 
+                          (map (fn [reg-obj]
+                                 (let [apply-fn (:apply reg-obj)
+                                       value-atom (:value reg-obj)
+                                       prev-state @value-atom]
+                                   (swap! value-atom (fn [prev-state]
+                                                       (apply-fn prev-state entry)))))
+                               regs))
+                         (swap! runtime (fn [prev]
+                                          (assoc-in prev [:version-map oid] position))))
+                      
+                       (do
+                         (println "TODO: Need to buffer speculative writes!")))
+              :commit (do
+                        (validate-commit l (get-in entry [:data :reads]) position)
+                        (println "TODO: Need to handle runtime commit decisions!")))
+            
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
             (recur next-position runtime)))))))
 
@@ -209,6 +225,7 @@ These clones will serve as snapshots of the current state of the runtime"
 
 (defn begin-transaction
   [runtime-record]
+  (query-helper (:atom runtime-record) :tango-runtime)
   (let [runtime @(:atom runtime-record)
         {:keys [clone-mappings cloned-registry]} (take-full-object-registry-snapshot runtime)
         transaction-id (util/uuid)]
@@ -219,9 +236,68 @@ These clones will serve as snapshots of the current state of the runtime"
          (fn [oid]
            (cloned-registry oid))
          (fn [tango-object]
-           (clone-mappings (tango-object-hash tango-object))))
+           (clone-mappings (tango-object-hash tango-object)))
+         (:version-map runtime))
         (TransactionTangoRuntime.))))
 
+(defn validate-commit-legacy
+  "Returns true if the commit entry does not have conflicts."
+  [log entry version-map]
+  (let [read-set (get-in entry [:data :reads])
+        oids-of-interest (distinct (map #(:oid %) read-set))
+        transaction-start (:position (first read-set))
+        transaction-end (:position entry)
+        transaction-window-entries (map #(:right (log/read log %)) (range transaction-start (inc transaction-end)))]
+    #break (println (count transaction-window-entries))
+    false))
+
+(defn create-first-read-position-map
+  "Create a map from oid to first position in the read-set"
+  [read-set]
+  (reduce (fn [acc {:keys [oid position]}]
+            (if (nil? (acc oid))
+              (assoc acc oid position)
+              acc))
+          {}
+          read-set))
+
+(defn validate-write-set
+  [rs-map position write-set]
+  (let [write-set-oids (distinct (map #(:oid %) write-set))]
+    (reduce (fn [acc cur]
+              (if (not acc)
+                acc
+                (if (< (rs-map cur) position)
+                  false
+                  true)))
+            true
+            write-set-oids)))
+
 (defn validate-commit
-  [position]
-  nil)
+  [log read-set end-position]
+  (if (empty? read-set)
+    true
+    (let [start-pos (:position (first read-set))
+          end-pos end-position
+          rs-map (create-first-read-position-map read-set)]
+      (loop [position start-pos]
+        (if (< position end-pos)
+          (let [entry (:right (log/read log position))
+                type (:type entry)]
+            (case type
+              :write
+              (let [oid (:oid entry)
+                    first-read-pos (rs-map oid)]
+                (if (and (not (:speculative entry))
+                         (< first-read-pos position))
+                  false
+                  (recur (inc position))))
+              :commit
+              (let [read-set (get-in entry [:data :reads])
+                    write-set (get-in entry [:data :writes])]
+                (if (validate-commit log read-set position)
+                  (validate-write-set rs-map position write-set)
+                  (recur (inc position))))))
+          true)))))
+
+

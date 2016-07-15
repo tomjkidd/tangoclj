@@ -3,6 +3,7 @@
             [tango.object.register :as r]
             [tango.runtime :as rt]
             [tango.transaction-runtime :as trt]
+            [tango.log :as l]
             [clojure.test :as t]))
 
 (defrecord Command [oid runtime-id register-id action value])
@@ -16,27 +17,46 @@
   [cmd-list]
   (map cmd->Command cmd-list))
 
+(defn- add-new-runtime
+  "Create a new transaction runtime"
+  [runtime-id]
+  (fn [prev]
+    (let [rt (:main-runtime prev)
+          trt (rt/begin-transaction rt)]
+      (assoc-in prev [:transaction-runtimes runtime-id] trt))))
+
+(defn- add-new-register
+  "Create a new Tango Register"
+  [oid register-id]
+  (fn [prev]
+    (let [rt (:main-runtime prev)
+          r (r/tango-register oid rt)]
+      (assoc-in prev [:tango-registers register-id] r))))
+
+(defn- get-runtime
+  "Get the runtime associated with the given id. main id is special."
+  [state runtime-id]
+  (if (= runtime-id "main")
+    (:main-runtime state)
+    (get-in state [:transaction-runtimes runtime-id])))
+
 (defn simulate-command
   "Simulate a single command"
   [state-atom]
   (fn [{:keys [oid runtime-id register-id action value]}]
-    (let [state @state-atom]
-      (when (and (not= runtime-id "main")
-                 (nil? (get-in state [:transaction-runtimes runtime-id])))
-        (swap! state-atom (fn [prev]
-                       (let [rt (:main-runtime prev)
-                             trt (rt/begin-transaction rt)]
-                         (assoc-in prev [:transaction-runtimes runtime-id] trt)))))
-      (when (nil? (get-in state [:tango-registers register-id]))
-        (swap! state-atom (fn [prev]
-                            (let [rt (:main-runtime prev)
-                                  r (r/tango-register oid rt)]
-                              (assoc-in prev [:tango-registers register-id] r)))))
+    (let [state @state-atom
+          needs-new-runtime? (and (not= runtime-id "main")
+                                      (nil?
+                                       (get-in state
+                                               [:transaction-runtimes runtime-id])))
+          needs-new-register? (nil? (get-in state [:tango-registers register-id]))]
+      (when needs-new-runtime?
+        (swap! state-atom (add-new-runtime runtime-id)))
+      (when needs-new-register?
+        (swap! state-atom (add-new-register oid register-id)))
 
       (let [state @state-atom
-            rt (if (= runtime-id "main")
-                 (:main-runtime state)
-                 (get-in state [:transaction-runtimes runtime-id]))
+            rt (get-runtime state runtime-id)
             r (get-in state [:tango-registers register-id])
             result (case action
                      :read (r/get r rt)
@@ -61,11 +81,11 @@
                           runtime-id))
           :commit (if (= value result)
                     (either/success
-                     (format "Wrote a commit and %2%s returned %1$s"
+                     (format "Wrote a commit and %2$s returned %1$s"
                              value
                              runtime-id))
                     (either/error
-                     (format "Wrote a commit and %2%s did not return %1$s"
+                     (format "Wrote a commit and %2$s did not return %1$s"
                              value
                              runtime-id))))))))
 
@@ -104,13 +124,27 @@ Write a value, and then read to make sure that vaue was set."
   (cmd-list->Command-list transaction-isolation))
 
 (defn see-reads-and-writes
+  "A tool to look at results conveniently"
   [commands transaction-runtime-id]
-  (let [trt (get-in
-             (simulate commands) 
+  (let [result (simulate commands)
+        rt (get-in result [:state :main-runtime])
+        rt-atom (:atom rt)
+        trt (get-in
+             result
              [:state :transaction-runtimes transaction-runtime-id])
-        trt-atom (:atom trt)]
-    
+        trt-atom (:atom trt)
+        log (get-in @trt-atom [:log])
+        version-map (get-in @trt-atom [:version-map])]
+    (print (get-in @rt-atom [:version-map]))
     (select-keys
      @trt-atom
-     [:next-position :reads :writes :out-of-tx-writes])
-    trt-atom))
+     [:version-map :log :next-position :reads :writes :out-of-tx-writes])))
+
+(defn run-commands
+  [commands]
+  (doall (map (fn [either]
+                (if (either/has-error? either)
+                  (println "Error:" (:left either))
+                  (println "Success:" (:right either))))
+              (:results (simulate commands)))))
+

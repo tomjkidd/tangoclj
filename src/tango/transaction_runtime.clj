@@ -1,7 +1,8 @@
 (ns tango.transaction-runtime
   (:require [tango.log :as log]
             [tango.log.atom :as atom-log]
-            [tango.runtime.core :as core]))
+            [tango.runtime.core :as core]
+            [tango.runtime :as rt]))
 
 (defn tango-transaction-runtime
   "Creates a transaction runtime for a shared log
@@ -35,13 +36,18 @@ A tango-object has the following fields
 NOTE: :apply and :get-current-state are functions
 NOTE: :value is a clojure Atom!!
 
+The version-map is passed in to provide the transaction runtime with a map for each
+oid to it's most recent applied write.
+NOTE: For transactions, speculative writes will appear to have been written at the
+commit entry in the log.
+
 More about the transaction runtime:
 
 :reads is a chronological list of the (:oid,:position)s where reads are performed in 
 the transaction
 :writes is a chronological list of the (:oid,:position)s where writes are performed in
 the transaction"
-  [transaction-id log next-position oid->clones tango-object->clone-object]
+  [transaction-id log next-position oid->clones tango-object->clone-object version-map]
   (atom {:id transaction-id
          :log log
          :starting-next-position next-position
@@ -50,6 +56,7 @@ the transaction"
          :oid->clones oid->clones
          :tango-object->clone-object tango-object->clone-object
          :object-registry {}
+         :version-map version-map
          :reads []
          :writes []
          :out-of-tx-writes []}))
@@ -108,15 +115,21 @@ isolated changes."
      (query-helper runtime oid position)))
 
   ([runtime oid position]
-   (let [deref-rt @runtime
-         l (:log deref-rt)
+   (let [rt @runtime
+         l (:log rt)
+         write-set (:writes rt)
          p position
          tail (log/tail l)
          log-ready? (not (nil? tail))]
-     (when (nil? (deref-rt oid))
+     (when (nil? (rt oid))
        ; If this is the first time oid is used, cache clones
        (cache-clones runtime oid))
      (when log-ready?
+       (let [old-reads (:reads rt)
+             new-read {:oid oid :position position}
+             new-reads (conj old-reads new-read)]
+         (swap! runtime (fn [prev] (assoc prev :reads new-reads))))
+       
        (loop [position p runtime runtime]
          (when (<= position tail)
            (let [rt @runtime
@@ -128,31 +141,29 @@ isolated changes."
                  regs (registry oid)
                  next-position (inc position)]
              
-             (when (= :write entry-type)
-                                        ; Record that the read to oid occurred
-               (let [old-reads (:reads rt)
-                     new-read {:oid oid :position position}
-                     new-reads (conj old-reads new-read)]
-                 (swap! runtime (fn [prev] (assoc prev :reads new-reads))))
-               
-               (if (:speculative entry)
-                 (doall 
-                  (map (fn [reg-obj]
-                         (let [apply-fn (:apply reg-obj)
-                               value-atom (:value reg-obj)
-                               prev-state @value-atom]
-                           (swap! value-atom (fn [prev-state]
-                                               (apply-fn prev-state entry)))))
-                       regs))
-                 (do
-                   (let [old-writes (:out-of-tx-writes rt)
-                         new-write {:oid entry-oid :position position}
-                         new-writes (conj old-writes new-write)]
-                     (swap! runtime (fn [prev]
-                                      (assoc prev :out-of-tx-writes new-writes))))))
+             (case entry-type
+               :write (if (:speculative entry)
+                        (if (some #(= position (:position %)) write-set)
+                          (doall 
+                           (map (fn [reg-obj]
+                                  (let [apply-fn (:apply reg-obj)
+                                        value-atom (:value reg-obj)
+                                        prev-state @value-atom]
+                                    (swap! value-atom (fn [prev-state]
+                                                        (apply-fn prev-state entry)))))
+                                regs))
 
-               (swap! runtime (fn [prev] (assoc prev :next-position next-position))))
-             
+                          (let [old-writes (:out-of-tx-writes rt)
+                                new-write {:oid entry-oid :position position}
+                                new-writes (conj old-writes new-write)]
+                            (swap! runtime (fn [prev]
+                                             (assoc prev :out-of-tx-writes new-writes)))))
+                        (do
+                          (println "TODO: Update the version-map to follow what the main runtime is doing.")))
+               :commit (do                       
+                         (println "TODO: Need to handle transaction runtim commit decisions!")))
+              
+             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
              (recur next-position runtime))))))))
 
 (defn create-commit-entry
@@ -168,22 +179,19 @@ isolated changes."
 (defn commit-transaction
   "Attempt to commit a transaction. Returns true if able, false otherwise."
   [runtime]
-  ; TODO: Write a commit entry to the log
-
   ; Write a commit entry to the log then
   ; Read through the commit position to collect all changes
   (let [rt @(:atom runtime)
-        l (:log rt)
-        commit-entry (create-commit-entry (:id rt)
-                                          (select-keys rt [:reads :writes]))
-        commit-position (append-commit-entry l commit-entry)]
+        {:keys [log id]} rt
+        commit-data (select-keys rt [:reads :writes])
+        commit-entry (create-commit-entry id commit-data)
+        commit-position (append-commit-entry log commit-entry)]
     (swap! (:atom runtime) (fn [prev]
                              (assoc prev :commit-position commit-position)))
-    (query-helper (:atom runtime) :transaction-runtime commit-position))
-  
-  ; Determine if the transaction is valid
-  (let [rt @(:atom runtime)
-        details (select-keys rt [:reads :writes :out-of-tx-writes])]
-    details
-    rt))
+
+    (query-helper (:atom runtime) :transaction-runtime commit-position)
+    
+    (let [e (:right (log/read log commit-position))
+          vm (:version-map @(:atom runtime))]
+      (rt/validate-commit log (get-in e [:data :reads]) commit-position))))
 

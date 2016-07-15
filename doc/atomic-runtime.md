@@ -4,7 +4,7 @@ I decided to create a branch that would push the atoms that were being
 stored in each tango object to be the responsibility of the runtime.
 
 The reason I made this change was an effort to make it so that in order
-to allow transactions to read their own rights, I would need copies of
+to allow transactions to read their own writes, I would need copies of
 the objects to be created. In the old system, this would mean that the
 runtime would have to create copies of the objects. The would require
 a read through the whole log to put the copies into the correct state 
@@ -31,3 +31,4 @@ accurate data locally if you choose to use it.
 
 The tango objects now use an apply with a different type signature,
 the previous state and the log entry
+
