@@ -105,9 +105,6 @@ Write a value, and then read to make sure that vaue was set."
   [["abc" "main" "reg1" :write 100]
    ["abc" "main" "reg1" :read 100]])
 
-(def simple-write-cmds
-  (cmd-list->Command-list simple-write))
-
 (def transaction-isolation
   "Represents a case where writes in a transaction don't affect others"
   [["abc" "main" "reg1" :write 0]
@@ -116,17 +113,23 @@ Write a value, and then read to make sure that vaue was set."
    ["abc" "main" "reg1" :read 0]
    ["abc" "tx-1" "reg1" :read 100]
    [nil "tx-1" nil :commit true]
-   ["abc" "main" "reg1" :read 100]
-   ;["abc" "tx-1" "reg1" :write 200]
-   ])
+   ["abc" "main" "reg1" :read 100]])
 
-(def transaction-isolation-cmds
-  (cmd-list->Command-list transaction-isolation))
+(def transaction-abort
+  "Represents a case where a transaction is aborted"
+  [["abc" "main" "reg1" :write 0]
+   ["abc" "tx-1" "reg1" :read 0]
+   ["abc" "tx-1" "reg1" :write 100]
+   ["abc" "main" "reg1" :write 200]
+   ["abc" "main" "reg1" :read 200]
+   ["abc" "tx-1" "reg1" :read 100]
+   [nil "tx-1" nil :commit false]
+   ["abc" "main" "reg1" :read 200]])
 
 (defn see-reads-and-writes
   "A tool to look at results conveniently"
   [commands transaction-runtime-id]
-  (let [result (simulate commands)
+  (let [result (simulate (cmd-list->Command-list commands))
         rt (get-in result [:state :main-runtime])
         rt-atom (:atom rt)
         trt (get-in
@@ -142,9 +145,13 @@ Write a value, and then read to make sure that vaue was set."
 
 (defn run-commands
   [commands]
-  (doall (map (fn [either]
-                (if (either/has-error? either)
-                  (println "Error:" (:left either))
-                  (println "Success:" (:right either))))
-              (:results (simulate commands)))))
+  (-> (cmd-list->Command-list commands)
+      (simulate)
+      (:results)
+      ((fn [rs]
+          (doall (map (fn [either]
+                        (if (either/has-error? either)
+                          (println "Error:" (:left either))
+                          (println "Success:" (:right either))))
+                      rs))))))
 

@@ -1,8 +1,7 @@
 (ns tango.transaction-runtime
   (:require [tango.log :as log]
             [tango.log.atom :as atom-log]
-            [tango.runtime.core :as core]
-            [tango.runtime :as rt]))
+            [tango.runtime.core :as core]))
 
 (defn tango-transaction-runtime
   "Creates a transaction runtime for a shared log
@@ -166,6 +165,20 @@ isolated changes."
              (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
              (recur next-position runtime))))))))
 
+(defrecord TransactionTangoRuntime [atom]
+  core/ITangoRuntime
+  (update-helper [this oid opaque]
+    (update-helper (:atom this) oid opaque))
+  (query-helper [this oid]
+    (query-helper (:atom this) oid))
+  (get-current-state [this tango-object]
+    (get-current-state (:atom this) tango-object)))
+
+(defn transaction-runtime
+  "Create a TransactionTangoRuntime conveniently"
+  [runtime-atom]
+  (TransactionTangoRuntime. runtime-atom))
+
 (defn create-commit-entry
   [runtime-id reads-and-writes]
   {:type :commit
@@ -193,5 +206,4 @@ isolated changes."
     
     (let [e (:right (log/read log commit-position))
           vm (:version-map @(:atom runtime))]
-      (rt/validate-commit log (get-in e [:data :reads]) commit-position))))
-
+      (core/validate-commit log (get-in e [:data :reads]) commit-position))))

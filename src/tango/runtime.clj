@@ -4,7 +4,7 @@
             [tango.util :as util]
             [tango.util.either :as either]
             [tango.transaction-runtime :as trans]
-            [tango.runtime.core :as c]))
+            [tango.runtime.core :as core]))
 
 ; TODO: Add an optional position argument to query-helper that will tell the reader a point at which to stop syncing
 ; TODO: Add a checkpoint function to allow which will provide query-helper with a position of the checkpoint to make reads faster
@@ -97,7 +97,7 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
                        (do
                          (println "TODO: Need to buffer speculative writes!")))
               :commit (do
-                        (validate-commit l (get-in entry [:data :reads]) position)
+                        (core/validate-commit l (get-in entry [:data :reads]) position)
                         (println "TODO: Need to handle runtime commit decisions!")))
             
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
@@ -148,7 +148,7 @@ Object"
   (tango-runtime (in-memory-log)))
 
 (defrecord TangoRuntime [atom]
-  c/ITangoRuntime
+  core/ITangoRuntime
   (update-helper [this oid opaque]
     (update-helper (:atom this) oid opaque))
   (query-helper [this oid]
@@ -160,20 +160,6 @@ Object"
   "Create a TangRuntime record conveniently"
   []
   (TangoRuntime. (in-memory-runtime)))
-
-(defrecord TransactionTangoRuntime [atom]
-  c/ITangoRuntime
-  (update-helper [this oid opaque]
-    (trans/update-helper (:atom this) oid opaque))
-  (query-helper [this oid]
-    (trans/query-helper (:atom this) oid))
-  (get-current-state [this tango-object]
-    (trans/get-current-state (:atom this) tango-object)))
-
-(defn transaction-runtime
-  "Create a TransactionTangoRuntime conveniently"
-  [runtime-atom]
-  (TransactionTangoRuntime. runtime-atom))
 
 (defn- clone-registry-object
   "Take a snapshot of a single Tango Object (from the registry)
@@ -238,7 +224,7 @@ These clones will serve as snapshots of the current state of the runtime"
          (fn [tango-object]
            (clone-mappings (tango-object-hash tango-object)))
          (:version-map runtime))
-        (TransactionTangoRuntime.))))
+        (trans/transaction-runtime))))
 
 (defn validate-commit-legacy
   "Returns true if the commit entry does not have conflicts."
@@ -250,54 +236,5 @@ These clones will serve as snapshots of the current state of the runtime"
         transaction-window-entries (map #(:right (log/read log %)) (range transaction-start (inc transaction-end)))]
     #break (println (count transaction-window-entries))
     false))
-
-(defn create-first-read-position-map
-  "Create a map from oid to first position in the read-set"
-  [read-set]
-  (reduce (fn [acc {:keys [oid position]}]
-            (if (nil? (acc oid))
-              (assoc acc oid position)
-              acc))
-          {}
-          read-set))
-
-(defn validate-write-set
-  [rs-map position write-set]
-  (let [write-set-oids (distinct (map #(:oid %) write-set))]
-    (reduce (fn [acc cur]
-              (if (not acc)
-                acc
-                (if (< (rs-map cur) position)
-                  false
-                  true)))
-            true
-            write-set-oids)))
-
-(defn validate-commit
-  [log read-set end-position]
-  (if (empty? read-set)
-    true
-    (let [start-pos (:position (first read-set))
-          end-pos end-position
-          rs-map (create-first-read-position-map read-set)]
-      (loop [position start-pos]
-        (if (< position end-pos)
-          (let [entry (:right (log/read log position))
-                type (:type entry)]
-            (case type
-              :write
-              (let [oid (:oid entry)
-                    first-read-pos (rs-map oid)]
-                (if (and (not (:speculative entry))
-                         (< first-read-pos position))
-                  false
-                  (recur (inc position))))
-              :commit
-              (let [read-set (get-in entry [:data :reads])
-                    write-set (get-in entry [:data :writes])]
-                (if (validate-commit log read-set position)
-                  (validate-write-set rs-map position write-set)
-                  (recur (inc position))))))
-          true)))))
 
 
