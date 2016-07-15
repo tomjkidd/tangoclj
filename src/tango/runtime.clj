@@ -43,7 +43,8 @@ will need to know which object it is working with.
          :next-position 0
          :object-registry {}
          :version-map {}
-         :transaction-mappings {}}))
+         :transaction-mappings {}
+         :aborted []}))
 
 (defn get-current-state
   [runtime-atom tango-object]
@@ -57,6 +58,14 @@ will need to know which object it is working with.
                    :oid oid
                    :value opaque
                    :speculative false})))
+
+(defn- note-aborted
+  "Update the runtime to track an aborted commit entry"
+  [runtime-atom entry]
+  (swap! runtime-atom (fn [prev]
+                        (let [old-aborted (get prev :aborted)
+                              new-aborted (conj old-aborted entry)]
+                          (assoc prev :aborted new-aborted)))))
 
 (defn- update-version-map
   [runtime-atom oid position]
@@ -125,7 +134,7 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
                          (println "TODO: Need to buffer speculative writes!")))
               :commit (if (core/validate-commit l (get-in entry [:data :reads]) position)
                         (apply-commit runtime registry entry l)
-                        (println "TODO: Need to handle runtime abort!")))
+                        (note-aborted runtime entry)))
             
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
             (recur next-position runtime)))))))

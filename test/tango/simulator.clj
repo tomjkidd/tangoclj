@@ -8,14 +8,14 @@
 
 (defrecord Command [oid runtime-id register-id action value])
 
-(defn cmd->Command
-  "Convert a list of args to a Command record"
-  [cmd]
-  (apply ->Command cmd))
+(defn trace->Command
+  "Convert a trace to a Command record"
+  [trace]
+  (apply ->Command trace))
 
-(defn cmd-list->Command-list
-  [cmd-list]
-  (map cmd->Command cmd-list))
+(defn trace-list->Command-list
+  [trace-list]
+  (map trace->Command trace-list))
 
 (defn- add-new-runtime
   "Create a new transaction runtime"
@@ -70,10 +70,11 @@
                            register-id
                            runtime-id))
                   (either/error
-                   (format "Tried and failed to read %1$s from %2$s in runtime '%3$s'"
+                   (format "Expected to read %1$s from %2$s in runtime '%3$s'. Actually read %4$s."
                            value
                            register-id
-                           runtime-id)))
+                           runtime-id
+                           result)))
           :write (either/success
                   (format "Wrote the value %1$s to %2$s in runtime '%3$s'"
                           value
@@ -145,13 +146,16 @@ Write a value, and then read to make sure that vaue was set."
 
 (defn run-commands
   [commands]
-  (-> (cmd-list->Command-list commands)
-      (simulate)
-      (:results)
-      ((fn [rs]
-          (doall (map (fn [either]
-                        (if (either/has-error? either)
-                          (println "Error:" (:left either))
-                          (println "Success:" (:right either))))
-                      rs))))))
+  (let [{:keys [results state]} (-> (cmd-list->Command-list commands)
+                                    (simulate))]
+    (if (every? identity (doall (map (fn [either]
+                                       (let [e (either/has-error? either)
+                                             passed (not e)]
+                                         (if e
+                                           (println "Error:" (:left either))
+                                           (println "Success:" (:right either)))
+                                         passed))
+                                     results)))
+      true
+      state)))
 
