@@ -36,3 +36,16 @@
   (let [throw-error (fn [left]
                       (throw (Exception. (str left))))]
     (succeed-or-fn either throw-error)))
+
+(defn wrapped-try-fn
+  "Take a function that might throw an exception and turn it into an Either"
+  [might-throw]
+  (try
+    (success (might-throw))
+    (catch Exception e (error e))))
+
+(defmacro wrapped-try
+  "Evaluates test in a wrapper function to provide exceptions through an Either, 
+rather than throwing."
+  [test]
+  (list 'wrapped-try-fn (cons 'fn (cons [] (list test)))))
