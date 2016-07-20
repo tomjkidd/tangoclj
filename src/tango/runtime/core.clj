@@ -32,6 +32,9 @@
             write-set-oids)))
 
 (defn validate-commit
+  "The standard procedure to use to validate a commit against the shared log.
+
+NOTE: loop-state atom was necesary in order to satisfy tail call position."
   [log read-set end-position]
   (if (empty? read-set)
     true
@@ -41,20 +44,35 @@
       (loop [position start-pos]
         (if (< position end-pos)
           (let [entry (:right (log/read log position))
-                type (:type entry)]
+                type (:type entry)
+                loop-state (atom {:terminate false :result false})]
             (case type
               :write
               (let [oid (:oid entry)
                     first-read-pos (rs-map oid)]
                 (if (and (not (:speculative entry))
+                         (not (nil? first-read-pos))
                          (< first-read-pos position))
-                  false
-                  (recur (inc position))))
+                  (swap! loop-state (fn [prev]
+                                      {:terminate true
+                                       :result false}))
+                  (swap! loop-state (fn [{:keys [result]}]
+                                      {:terminate false
+                                       :result result}))))
               :commit
               (let [read-set (get-in entry [:data :reads])
                     write-set (get-in entry [:data :writes])]
                 (if (validate-commit log read-set position)
-                  (validate-write-set rs-map position write-set)
-                  (recur (inc position))))))
+                  (do
+                    (swap! loop-state (fn [prev]
+                                        {:terminate true
+                                         :result (validate-write-set rs-map position write-set)})))
+                  (swap! loop-state (fn [{:keys [result]}]
+                                      {:terminate false
+                                       :result result})))))
+            (let [ls @loop-state]
+              (if (:terminate ls)
+                (:result ls)
+                (recur (inc position)))))
           true)))))
 

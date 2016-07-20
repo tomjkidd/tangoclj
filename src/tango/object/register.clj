@@ -10,7 +10,7 @@
   [oid tango-runtime]
   (let [either (rt/create-tango-object tango-runtime
                                        {:oid oid
-                                        :nullary-value nil
+                                        :nullary-value 0
                                         :apply (fn [prev-state log-entry]
                                                  (:value log-entry))})]
     (either/succeed-or-throw-error either)))

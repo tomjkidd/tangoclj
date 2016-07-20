@@ -4,6 +4,7 @@
             [tango.runtime :as rt]
             [tango.transaction-runtime :as trt]
             [tango.log :as l]
+            [tango.traces :as traces]
             [clojure.test :as t]))
 
 (defrecord Command [oid runtime-id register-id action value])
@@ -30,8 +31,8 @@
   [oid register-id]
   (fn [prev]
     (let [rt (:main-runtime prev)
-          r (r/tango-register oid rt)]
-      (assoc-in prev [:tango-registers register-id] r))))
+          reg (r/tango-register oid rt)]
+      (assoc-in prev [:tango-registers register-id] reg))))
 
 (defn- get-runtime
   "Get the runtime associated with the given id. main id is special."
@@ -57,10 +58,10 @@
 
       (let [state @state-atom
             rt (get-runtime state runtime-id)
-            r (get-in state [:tango-registers register-id])
+            reg (get-in state [:tango-registers register-id])
             result (case action
-                     :read (r/get r rt)
-                     :write (r/set r value rt)
+                     :read (r/get reg rt)
+                     :write (r/set reg value rt)
                      :commit (trt/commit-transaction rt))]
         (case action
           :read (if (= value result)
@@ -130,7 +131,7 @@ Write a value, and then read to make sure that vaue was set."
 (defn see-reads-and-writes
   "A tool to look at results conveniently"
   [commands transaction-runtime-id]
-  (let [result (simulate (cmd-list->Command-list commands))
+  (let [result (simulate (trace->Command commands))
         rt (get-in result [:state :main-runtime])
         rt-atom (:atom rt)
         trt (get-in
@@ -146,7 +147,7 @@ Write a value, and then read to make sure that vaue was set."
 
 (defn run-commands
   [commands]
-  (let [{:keys [results state]} (-> (cmd-list->Command-list commands)
+  (let [{:keys [results state]} (-> (trace-list->Command-list commands)
                                     (simulate))]
     (if (every? identity (doall (map (fn [either]
                                        (let [e (either/has-error? either)

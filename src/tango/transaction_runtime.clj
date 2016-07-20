@@ -58,7 +58,28 @@ the transaction"
          :version-map version-map
          :reads []
          :writes []
+         :out-of-band-writes []
          :out-of-tx-writes []}))
+(defn apply-entry
+  [entry]
+  (fn [reg-obj]
+    (let [apply-fn (:apply reg-obj)
+          value-atom (:value reg-obj)
+          prev-state @value-atom]
+      (swap! value-atom (fn [prev-state]
+                          (apply-fn prev-state entry))))))
+
+(defn apply-entry-to-tango-objects
+  [entry tango-objects]
+  (doall (map (apply-entry entry) tango-objects)))
+
+(defn- apply-out-of-band
+  [runtime oid clones]
+  (let [t oid
+        all-oob (:out-of-band-writes runtime)
+        entries (filter #(= oid (:oid %)) all-oob)]
+    (map #(apply-entry-to-tango-objects % clones) entries)
+    clones))
 
 (defn- cache-clones
   "Use the oid->clones function to get the Tango Objects and put them into
@@ -67,10 +88,11 @@ the object registry."
   (let [runtime @runtime-atom
         old-registry (:object-registry runtime)
         clones ((:oid->clones runtime) oid)
-        new-registry (assoc old-registry oid clones)]
+        up-to-date-clones (apply-out-of-band runtime oid clones)
+        new-registry (assoc old-registry oid up-to-date-clones)]
     (swap! runtime-atom (fn [prev]
                           (assoc prev :object-registry new-registry)))
-    clones))
+    up-to-date-clones))
 
 (defn get-current-state
   "Use the tango-object->clone-object function to get the clone that a given Tango
@@ -120,12 +142,12 @@ isolated changes."
          p position
          tail (log/tail l)
          log-ready? (not (nil? tail))]
-     (when (nil? (rt oid))
+     (when (nil? ((:object-registry rt) oid))
        ; If this is the first time oid is used, cache clones
        (cache-clones runtime oid))
      (when log-ready?
        (let [old-reads (:reads rt)
-             new-read {:oid oid :position position}
+             new-read {:oid oid :position tail}
              new-reads (conj old-reads new-read)]
          (swap! runtime (fn [prev] (assoc prev :reads new-reads))))
        
@@ -158,9 +180,14 @@ isolated changes."
                             (swap! runtime (fn [prev]
                                              (assoc prev :out-of-tx-writes new-writes)))))
                         (do
-                          (println "TODO: Update the version-map to follow what the main runtime is doing.")))
+                          (println "TODO: Update the version-map to follow what the main runtime is doing.")
+                          (apply-entry-to-tango-objects entry regs)
+                          (let [old-oob (:out-of-band-writes rt)
+                                new-oob (conj old-oob entry)]
+                            (swap! runtime (fn [prev]
+                                             (assoc prev :out-of-band-writes new-oob))))))
                :commit (do                       
-                         (println "TODO: Need to handle transaction runtim commit decisions!")))
+                         (println "TODO: Need to handle transaction runtime commit decisions!")))
               
              (swap! runtime (fn [prev] (assoc prev :next-position next-position)))
              (recur next-position runtime))))))))
