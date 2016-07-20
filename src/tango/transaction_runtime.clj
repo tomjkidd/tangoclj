@@ -218,20 +218,29 @@ isolated changes."
   (log/append log entry))
 
 (defn commit-transaction
-  "Attempt to commit a transaction. Returns true if able, false otherwise."
+  "Attempt to commit a transaction. Returns true if able, false otherwise.
+
+NOTE: Read-only transactions will not actually create a commit entry."
   [runtime]
   ; Write a commit entry to the log then
   ; Read through the commit position to collect all changes
   (let [rt @(:atom runtime)
         {:keys [log id]} rt
-        commit-data (select-keys rt [:reads :writes])
-        commit-entry (create-commit-entry id commit-data)
-        commit-position (append-commit-entry log commit-entry)]
-    (swap! (:atom runtime) (fn [prev]
-                             (assoc prev :commit-position commit-position)))
-
-    (query-helper (:atom runtime) :transaction-runtime commit-position)
+        {:keys [reads writes]} rt
+        read-only (empty? writes)
+        commit-position (if read-only
+                          (:position (last reads))
+                          (let [commit-entry (create-commit-entry id (select-keys rt [:reads :writes]))
+                                commit-position (append-commit-entry log commit-entry)]
+                            commit-position))
+        read-set (if read-only
+                   reads
+                   (let [e (:right (log/read log commit-position))]
+                     (get-in e [:data :reads])))]
+    (when (not read-only)
+      (swap! (:atom runtime) (fn [prev]
+                               (assoc prev :commit-position commit-position))))
     
-    (let [e (:right (log/read log commit-position))
-          vm (:version-map @(:atom runtime))]
-      (core/validate-commit log (get-in e [:data :reads]) commit-position))))
+    (query-helper (:atom runtime) :transaction-runtime commit-position)
+
+    (core/validate-commit log read-set commit-position)))
