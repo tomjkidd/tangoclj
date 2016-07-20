@@ -60,6 +60,7 @@ the transaction"
          :writes []
          :out-of-band-writes []
          :out-of-tx-writes []}))
+
 (defn apply-entry
   [entry]
   (fn [reg-obj]
@@ -181,7 +182,7 @@ isolated changes."
                                              (assoc prev :out-of-tx-writes new-writes)))))
                         (do
                           (println "TODO: Update the version-map to follow what the main runtime is doing.")
-                          (apply-entry-to-tango-objects entry regs)
+                          (apply-entry-to-tango-objects entry (registry entry-oid))
                           (let [old-oob (:out-of-band-writes rt)
                                 new-oob (conj old-oob entry)]
                             (swap! runtime (fn [prev]

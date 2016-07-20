@@ -21,7 +21,8 @@
                    (doall (csv/read-csv in-file)))
         clean-data (filter #(= 4 (count %)) raw-data)
         implied-writes '(["Write" "" "1" "0"]
-                         ["Write" "" "2" "0"])]
+                         ["Write" "" "2" "0"]
+                         ["Write" "" "3" "0"])]
     {:file filepath
      :data (concat implied-writes clean-data)}))
 
