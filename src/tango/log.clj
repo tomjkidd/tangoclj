@@ -10,3 +10,14 @@
     "Get the position of the current tail of the log")
   (trim [this position]
     "For the entry at the given position, set the entry's trimmed value"))
+
+(defn create-entry
+  [type oid value speculative]
+  {:type type
+   :oid oid
+   :value value
+   :speculative speculative})
+
+(defn create-write-entry
+  [oid value speculative]
+  (create-entry :write oid value speculative))

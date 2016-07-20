@@ -54,10 +54,7 @@ will need to know which object it is working with.
   "Write an entry to the log, targeting oid with an opaque value"
   [runtime oid opaque]
   (let [l (:log @runtime)]
-    (log/append l {:type :write
-                   :oid oid
-                   :value opaque
-                   :speculative false})))
+    (log/append l (log/create-write-entry oid opaque false))))
 
 (defn- note-aborted
   "Update the runtime to track an aborted commit entry"
@@ -66,40 +63,6 @@ will need to know which object it is working with.
                         (let [old-aborted (get prev :aborted)
                               new-aborted (conj old-aborted entry)]
                           (assoc prev :aborted new-aborted)))))
-
-(defn- update-version-map
-  [runtime-atom oid position]
-  (swap! runtime-atom (fn [prev]
-                        (assoc-in prev [:version-map oid] position))))
-(defn- apply-write
-  "Apply a :write entry to a tango-object."
-  [entry tango-object]
-  (let [apply-fn (:apply tango-object)
-        value-atom (:value tango-object)
-        prev-state @value-atom]
-    (swap! value-atom (fn [prev-state]
-                        (apply-fn prev-state entry)))))
-
-(defn- apply-writes
-  "Takes a list of tango-objects (from the registry) and applies a :write entry to 
-them in sequence."
-  [tango-objects entry]
-  (doall (map (partial apply-write entry) tango-objects)))
-
-(defn- apply-commit
-  "Apply a commit entry to the relevant tango-objects in the object-registry."
-  [runtime registry commit-entry log]
-  ; TODO: Maybe validate commit entry with the log?
-  (let [write-set (get-in commit-entry [:data :writes])
-        write-entries (doall (map (fn [{:keys [position]}]
-                                    (:right (log/read log position)))
-                                  write-set))]
-    (doall (map (fn [entry]
-                  (let [oid (:oid entry)
-                        tango-objects (registry oid)
-                        position (:position commit-entry)]
-                    (apply-writes tango-objects entry)
-                    (update-version-map runtime oid position))) write-entries))))
 
 (defn query-helper
   "Reads as far forward in the log as possible for the current state of the log (based on log tail).
@@ -128,12 +91,12 @@ For each entry, the :oid is used to find interested TangoObjects from the :objec
             (case type
               :write (if (not (:speculative entry))
                        (do
-                         (apply-writes regs entry)
-                         (update-version-map runtime oid position))
+                         (core/apply-writes regs entry)
+                         (core/update-version-map runtime oid position))
                        (do
                          (println "TODO: Need to buffer speculative writes!")))
               :commit (if (core/validate-commit l (get-in entry [:data :reads]) position)
-                        (apply-commit runtime registry entry l)
+                        (core/apply-commit runtime registry entry l)
                         (note-aborted runtime entry)))
             
             (swap! runtime (fn [prev] (assoc prev :next-position next-position)))

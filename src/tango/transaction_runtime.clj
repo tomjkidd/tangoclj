@@ -111,10 +111,7 @@ When a write is performed, it is added to the :writes of the transaction runtime
   (let [{:keys [log commit-position]} @runtime]
     (when (not (nil? commit-position))
       (throw (Exception. "Transaction committed already, can't perform more writes")))
-    (let [entry {:type :write
-                 :oid oid
-                 :value opaque
-                 :speculative true}
+    (let [entry (log/create-write-entry oid opaque true) 
           position (log/append log entry)]
       (swap! runtime (fn [prev]
                        (let [old-writes (:writes prev)
@@ -166,15 +163,8 @@ isolated changes."
              (case entry-type
                :write (if (:speculative entry)
                         (if (some #(= position (:position %)) write-set)
-                          (doall 
-                           (map (fn [reg-obj]
-                                  (let [apply-fn (:apply reg-obj)
-                                        value-atom (:value reg-obj)
-                                        prev-state @value-atom]
-                                    (swap! value-atom (fn [prev-state]
-                                                        (apply-fn prev-state entry)))))
-                                regs))
-
+                          (core/apply-writes regs entry)
+                          
                           (let [old-writes (:out-of-tx-writes rt)
                                 new-write {:oid entry-oid :position position}
                                 new-writes (conj old-writes new-write)]
@@ -182,7 +172,7 @@ isolated changes."
                                              (assoc prev :out-of-tx-writes new-writes)))))
                         (do
                           (println "TODO: Update the version-map to follow what the main runtime is doing.")
-                          (apply-entry-to-tango-objects entry (registry entry-oid))
+                          (core/apply-writes (registry entry-oid) entry)
                           (let [old-oob (:out-of-band-writes rt)
                                 new-oob (conj old-oob entry)]
                             (swap! runtime (fn [prev]

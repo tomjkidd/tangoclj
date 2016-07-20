@@ -76,3 +76,37 @@ NOTE: loop-state atom was necesary in order to satisfy tail call position."
                 (recur (inc position)))))
           true)))))
 
+(defn update-version-map
+  [runtime-atom oid position]
+  (swap! runtime-atom (fn [prev]
+                        (assoc-in prev [:version-map oid] position))))
+
+(defn apply-write
+  "Apply a :write entry to a tango-object."
+  [entry tango-object]
+  (let [apply-fn (:apply tango-object)
+        value-atom (:value tango-object)
+        prev-state @value-atom]
+    (swap! value-atom (fn [prev-state]
+                        (apply-fn prev-state entry)))))
+
+(defn apply-writes
+  "Takes a list of tango-objects (from the registry) and applies a :write entry to 
+them in sequence."
+  [tango-objects entry]
+  (doall (map (partial apply-write entry) tango-objects)))
+
+(defn apply-commit
+  "Apply a commit entry to the relevant tango-objects in the object-registry."
+  [runtime registry commit-entry log]
+  ; TODO: Maybe validate commit entry with the log?
+  (let [write-set (get-in commit-entry [:data :writes])
+        write-entries (doall (map (fn [{:keys [position]}]
+                                    (:right (log/read log position)))
+                                  write-set))]
+    (doall (map (fn [entry]
+                  (let [oid (:oid entry)
+                        tango-objects (registry oid)
+                        position (:position commit-entry)]
+                    (apply-writes tango-objects entry)
+                    (update-version-map runtime oid position))) write-entries))))
