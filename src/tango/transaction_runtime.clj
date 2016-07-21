@@ -139,8 +139,9 @@ isolated changes."
          write-set (:writes rt)
          p position
          tail (log/tail l)
-         log-ready? (not (nil? tail))]
-     (when (nil? ((:object-registry rt) oid))
+         log-ready? (not (nil? tail))
+         load-clones (nil? ((:object-registry rt) oid))]
+     (when load-clones
        ; If this is the first time oid is used, cache clones
        (cache-clones runtime oid))
      (when log-ready?
@@ -172,7 +173,9 @@ isolated changes."
                                              (assoc prev :out-of-tx-writes new-writes)))))
                         (do
                           (println "TODO: Update the version-map to follow what the main runtime is doing.")
-                          (core/apply-writes (registry entry-oid) entry)
+                          (when load-clones
+                            (core/apply-writes (registry entry-oid) entry))
+
                           (let [old-oob (:out-of-band-writes rt)
                                 new-oob (conj old-oob entry)]
                             (swap! runtime (fn [prev]

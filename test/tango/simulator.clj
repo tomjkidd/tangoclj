@@ -160,3 +160,29 @@ Write a value, and then read to make sure that vaue was set."
       true
       state)))
 
+
+(defn run-trace
+  [{:keys [file data]}]
+  (let [{:keys [results state]} (-> (trace-list->Command-list data)
+                                    (simulate))
+        passed (every? identity
+                       (doall
+                        (map (fn [either]
+                               (not (either/has-error? either)))
+                             results)))]
+    {:file file
+     :passed passed
+     :detail results}))
+
+(defn run-all
+  []
+  (let [simple (map #(hash-map :file (first %) :data (second %))
+                    (partition 2 ["simple-write" simple-write
+                                  "transaction-isolation" transaction-isolation
+                                  "transaction-abort" transaction-abort]))
+        file-based (traces/get-traces)]
+    (map run-trace (concat simple file-based))))
+
+(defn run-all-concise
+  []
+  (filter #(not (:passed %)) (run-all)))
